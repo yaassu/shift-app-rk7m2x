@@ -117,6 +117,9 @@
   <section id="v-shift" class="view active">
     <div class="card">
       <div class="modebar noprint">
+        <label class="opt" style="width:auto;display:inline-block;cursor:pointer;margin:0;font-weight:600;">
+          📥 有給を取込(Excel/CSV)<input type="file" id="leaveFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="importLeave(event)">
+        </label>
         <button onclick="autoDraft()" class="primary">⚡ 自動下書き生成</button>
         <button onclick="clearAssignments()">🧹 割当を全消去</button>
         <button onclick="unlockAll()">🔓 ロック全解除</button>
@@ -189,6 +192,17 @@
         <button onclick="disableCloud()">ローカルのみに戻す</button>
       </div>
       <p id="fbStatus" class="hint" style="margin-top:10px"></p>
+    </div>
+    <div class="card">
+      <h2>有給希望の入力（CSV）</h2>
+      <p class="hint">毎年この手順で集められます：①ひな形を書き出し → ②先生に配って、休みたい日のマスに印（○・1・有 など何でもOK）を入れてもらう → ③記入済みCSVを「📥 有給を取込」で読み込む。<br>
+        ひな形は<b>今の先生一覧と期間</b>で作られます（土日・休園日は除外）。先生やクラスを変えたら作り直してください。Excelの有給希望表もそのまま取り込めます。</p>
+      <div class="row">
+        <button class="primary" onclick="exportLeaveCsv()">📄 有給入力CSVのひな形を書き出し</button>
+        <label class="opt" style="width:auto;display:inline-block;cursor:pointer;margin:0;font-weight:600;">
+          📥 有給を取込(Excel/CSV)<input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importLeave(event)">
+        </label>
+      </div>
     </div>
     <div class="card">
       <h2>ファイルで保存・復元（バックアップ）</h2>
@@ -619,6 +633,100 @@ function importJson(ev){
   const f=ev.target.files[0]; if(!f) return; const rd=new FileReader();
   rd.onload=()=>{ try{ const s=JSON.parse(rd.result); if(!s.teachers) throw 0; state=Object.assign(defaultState(),s); persist(); refreshAll(); alert('読み込みました'); }catch(e){ alert('読み込みに失敗しました'); } };
   rd.readAsText(f); ev.target.value='';
+}
+
+// ====================== 有給取込（Excel / CSV 両対応） ======================
+function importLeave(ev){
+  const f=ev.target.files[0]; if(!f) return;
+  const isCsv=/\.csv$/i.test(f.name);
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      const {found,unknown}= isCsv ? parseLeaveCsv(rd.result) : parseLeaveWorkbook(rd.result);
+      applyLeave(found,unknown);
+    }catch(e){ console.error(e); alert('取り込みに失敗しました。ファイル形式をご確認ください。'); }
+    ev.target.value='';
+  };
+  if(isCsv) rd.readAsText(f); else rd.readAsArrayBuffer(f);
+}
+
+// 取り込んだ {date,ids} 一覧を各日の有給に反映
+function applyLeave(found,unknown){
+  if(!found || found.length===0){ alert('有給のデータが見つかりませんでした。ファイルの形式をご確認ください。'); return; }
+  const inPeriod=found.filter(x=>x.date>=state.period.start && x.date<=state.period.end);
+  const total=inPeriod.reduce((a,x)=>a+x.ids.length,0);
+  let msg=`有給を取り込みます。\n対象 ${inPeriod.length} 日 / 延べ ${total} 件。\n各日の有給を上書きします（既存の有給設定は置き換わります）。`;
+  if(unknown && unknown.size) msg+=`\n\n⚠ 先生一覧に無い名前: ${[...unknown].join('、')}\n（この名前は取り込まれません。先生タブで追加してから再取込してください）`;
+  msg+='\n\nよろしいですか？';
+  if(!confirm(msg)) return;
+  inPeriod.forEach(({date,ids})=>{
+    const d=dayOf(date); d.leave=ids.slice();
+    for(const sid in d.assign) for(const p in d.assign[sid]) if(ids.includes(d.assign[sid][p])){ delete d.assign[sid][p]; delete d.lock[sid+'-'+p]; }
+  });
+  persist(); renderGrid(); renderTally();
+  let done=`✅ ${inPeriod.length}日分・延べ${total}件の有給を取り込みました。`;
+  if(unknown && unknown.size) done+=`\n未登録の名前（未取込）: ${[...unknown].join('、')}`;
+  alert(done);
+}
+
+// 既存Excel形式（A列=日, B列=曜日, E〜Q列=希望者名が横並び）を読む
+function parseLeaveWorkbook(arrbuf){
+  const wb=XLSX.read(new Uint8Array(arrbuf),{type:'array',cellDates:true});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,blankrows:false});
+  const nameMap={}; state.teachers.forEach(t=>nameMap[t.name]=t.id);
+  let month=parseYmd(state.period.start).getMonth()+1, year=parseYmd(state.period.start).getFullYear(), prev=null;
+  const found=[]; const unknown=new Set();
+  rows.forEach(r=>{
+    const a=r[0], b=r[1]; let date=null;
+    if(a instanceof Date){ year=a.getFullYear(); month=a.getMonth()+1; prev=a.getDate(); date=ymd(a); }
+    else if(typeof a==='number' && a>=1 && a<=31 && typeof b==='string' && WD.includes(b)){
+      let day=a; if(prev!=null && day<prev){ month++; if(month>12){month=1;year++;} }
+      prev=day; date=`${year}-${pad(month)}-${pad(day)}`;
+    } else return;
+    const ids=[];
+    for(let c=4;c<=16;c++){ const v=r[c];
+      if(typeof v==='string' && v.trim()){ const nm=v.trim();
+        if(nameMap[nm]){ if(!ids.includes(nameMap[nm])) ids.push(nameMap[nm]); } else unknown.add(nm); } }
+    if(ids.length) found.push({date,ids});
+  });
+  return {found,unknown};
+}
+
+// CSVひな形（1行目: 日付,曜日,先生名... / 各行: 日付,曜日,各先生欄に印）を読む
+function parseLeaveCsv(text){
+  text=String(text).replace(/^﻿/,'');
+  const rows=text.split(/\r\n|\n|\r/).filter(l=>l.trim()!=='').map(l=>l.split(','));
+  const unknown=new Set(); const found=[];
+  if(rows.length<2) return {found,unknown};
+  const header=rows[0].map(s=>(s||'').trim());
+  const nameMap={}; state.teachers.forEach(t=>nameMap[t.name]=t.id);
+  const colId={};
+  for(let c=2;c<header.length;c++){ const nm=header[c]; if(!nm) continue; if(nameMap[nm]) colId[c]=nameMap[nm]; else unknown.add(nm); }
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r]; const date=normDate((row[0]||'').trim()); if(!date) continue;
+    const ids=[];
+    for(let c=2;c<row.length;c++){ const v=(row[c]||'').trim(); if(v && colId[c] && !ids.includes(colId[c])) ids.push(colId[c]); }
+    if(ids.length) found.push({date,ids});
+  }
+  return {found,unknown};
+}
+function normDate(s){
+  if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)){ const[y,m,d]=s.split('-').map(Number); return `${y}-${pad(m)}-${pad(d)}`; }
+  if(/^\d{1,2}\/\d{1,2}$/.test(s)){ const[m,d]=s.split('/').map(Number); return `${parseYmd(state.period.start).getFullYear()}-${pad(m)}-${pad(d)}`; }
+  return null;
+}
+
+// 有給入力用のCSVひな形を書き出し（先生名=列、出勤日=行）
+function exportLeaveCsv(){
+  const names=state.teachers.map(t=>t.name);
+  const lines=['日付,曜日,'+names.join(',')];
+  eachDate().forEach(date=>{ const d=dayOf(date); if(d.type==='closed') return;
+    lines.push(`${date},${WD[parseYmd(date).getDay()]}`+','.repeat(names.length));
+  });
+  const blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=`有給入力_${state.period.start}.csv`; a.click();
 }
 
 // ====================== Firebase ======================
