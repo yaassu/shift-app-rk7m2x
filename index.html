@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>長期休暇シフト作成</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#f4f6fa; --panel:#fff; --ink:#1f2937; --muted:#6b7280; --line:#e4e8ef;
+    --accent:#2563eb; --accent2:#1d4ed8; --ok:#15803d; --warn:#b45309; --bad:#b91c1c;
+    --leave:#fde68a; --closed:#e5e7eb; --event:#dbeafe;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic UI",sans-serif;
+    background:var(--bg);color:var(--ink);font-size:14px;}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px;
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:50;}
+  header h1{font-size:17px;margin:0;font-weight:700;}
+  .badge{font-size:12px;padding:3px 9px;border-radius:999px;background:#e5e7eb;color:#374151;font-weight:600;}
+  .badge.cloud{background:#dcfce7;color:#166534;}
+  .spacer{flex:1}
+  button{font-family:inherit;font-size:13px;border:1px solid var(--line);background:#fff;color:var(--ink);
+    padding:7px 12px;border-radius:8px;cursor:pointer;font-weight:600;}
+  button:hover{background:#f3f4f6}
+  button.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+  button.primary:hover{background:var(--accent2)}
+  button.ghost{background:transparent}
+  .tabs{display:flex;gap:4px;padding:8px 16px 0;background:var(--panel);border-bottom:1px solid var(--line);}
+  .tab{padding:9px 16px;border:none;border-bottom:3px solid transparent;background:none;border-radius:0;color:var(--muted);}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+  main{padding:16px;}
+  .view{display:none}.view.active{display:block}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;}
+  .card h2{font-size:15px;margin:0 0 12px;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  label.fld{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);font-weight:600;}
+  input,select{font-family:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);}
+  table{border-collapse:collapse;width:100%;}
+  .gridwrap{overflow:auto;max-height:72vh;border:1px solid var(--line);border-radius:10px;background:#fff;}
+  .grid th,.grid td{border:1px solid var(--line);padding:2px;text-align:center;white-space:nowrap;font-size:12px;}
+  .grid thead th{position:sticky;top:0;background:#f8fafc;z-index:3;}
+  .grid thead tr.t2 th{top:38px;}
+  .grid td.date,.grid th.date{position:sticky;left:0;background:#f8fafc;z-index:2;text-align:left;padding:4px 8px;min-width:118px;}
+  .grid thead th.date{z-index:4;}
+  .grid tr.sat td.date{background:#eef6ff;}
+  .grid tr.sun td.date,.grid tr.holiday td.date{background:#fdecec;}
+  .grid td.slotcell{min-width:78px;cursor:pointer;}
+  .grid td.slotcell.split{min-width:84px;}
+  .cellname{display:block;padding:2px 1px;border-radius:4px;line-height:1.3;}
+  .cellname.empty{color:#cbd5e1;}
+  .cellname.locked{box-shadow:inset 0 0 0 2px var(--accent);}
+  .grid td.closedrow{background:var(--closed);color:var(--muted);}
+  .grid td.eventrow{background:var(--event);}
+  .daytype{font-size:10px;color:var(--muted);}
+  .dnum{font-weight:700;}
+  .clshead{color:#fff;font-weight:700;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px;}
+  .swatch{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:4px;}
+  /* tally */
+  .tally{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;}
+  .tcard{border:1px solid var(--line);border-radius:9px;padding:8px 10px;}
+  .tcard .nm{font-weight:700;display:flex;justify-content:space-between;align-items:center;}
+  .tcard .sub{font-size:11px;color:var(--muted);}
+  .bar{height:7px;border-radius:4px;background:#eef2f7;margin-top:6px;overflow:hidden;}
+  .bar>span{display:block;height:100%;background:var(--accent);}
+  .tcard.over .bar>span{background:var(--bad);}
+  .tcard.under .bar>span{background:var(--warn);}
+  .pill{font-size:11px;padding:1px 7px;border-radius:999px;font-weight:700;}
+  .pill.ok{background:#dcfce7;color:#166534}.pill.over{background:#fee2e2;color:#991b1b}.pill.under{background:#fef3c7;color:#92400e}
+  .listtbl td,.listtbl th{border:1px solid var(--line);padding:5px 8px;text-align:left;}
+  .listtbl th{background:#f8fafc;}
+  .iconbtn{border:none;background:none;cursor:pointer;color:var(--muted);font-size:15px;padding:2px 6px;}
+  .iconbtn:hover{color:var(--bad)}
+  .hint{font-size:12px;color:var(--muted);line-height:1.6;}
+  .warn{color:var(--bad);font-weight:600;}
+  .ok{color:var(--ok);font-weight:600;}
+  dialog{border:none;border-radius:14px;padding:0;max-width:340px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+  dialog .dlg{padding:16px;}
+  dialog h3{margin:0 0 10px;font-size:15px;}
+  .opt{display:block;width:100%;text-align:left;margin:3px 0;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:#fff;}
+  .opt:hover{background:#eff6ff;border-color:var(--accent);}
+  .opt.clear{color:var(--bad);}
+  .modebar{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;}
+  @media print{
+    header,.tabs,.modebar,.legend,.noprint{display:none!important}
+    body{background:#fff;font-size:10px}
+    main{padding:0}
+    .card{border:none;box-shadow:none;padding:0;margin:0}
+    .gridwrap{max-height:none;overflow:visible;border:none}
+    .grid th,.grid td{font-size:9px}
+    .grid thead th{position:static}
+    .grid td.date,.grid th.date{position:static}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>📅 長期休暇シフト作成</h1>
+  <span id="modeBadge" class="badge">ローカル保存</span>
+  <span id="periodLabel" class="badge"></span>
+  <div class="spacer"></div>
+  <button class="primary" onclick="autoDraft()">⚡ 自動下書き</button>
+  <button onclick="window.print()">🖨 印刷</button>
+  <button onclick="exportXlsx()">⬇ Excel出力</button>
+</header>
+
+<div class="tabs">
+  <button class="tab active" data-v="shift" onclick="switchView('shift')">シフト表</button>
+  <button class="tab" data-v="teachers" onclick="switchView('teachers')">先生</button>
+  <button class="tab" data-v="settings" onclick="switchView('settings')">設定</button>
+  <button class="tab" data-v="cloud" onclick="switchView('cloud')">共有/保存</button>
+</div>
+
+<main>
+  <!-- ===== シフト表 ===== -->
+  <section id="v-shift" class="view active">
+    <div class="card">
+      <div class="modebar noprint">
+        <button onclick="autoDraft()" class="primary">⚡ 自動下書き生成</button>
+        <button onclick="clearAssignments()">🧹 割当を全消去</button>
+        <button onclick="unlockAll()">🔓 ロック全解除</button>
+        <label class="fld" style="flex-direction:row;align-items:center;gap:6px;">
+          <input type="checkbox" id="keepLocked" checked> 自動生成時に手動セルを保持
+        </label>
+      </div>
+      <div id="warnBox"></div>
+      <div class="gridwrap"><table class="grid" id="shiftGrid"></table></div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--leave)"></span>有給</span>
+        <span><span class="swatch" style="background:var(--closed)"></span>休園・休み</span>
+        <span><span class="swatch" style="background:var(--event)"></span>行事・全員出勤</span>
+        <span><span class="swatch" style="box-shadow:inset 0 0 0 2px var(--accent);background:#fff"></span>手動ロック</span>
+        <span class="hint">セルをクリックで割当・有給設定。日付をクリックで区分・行事メモ。</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>回数集計（半日=0.5）</h2>
+      <div id="tally" class="tally"></div>
+    </div>
+  </section>
+
+  <!-- ===== 先生 ===== -->
+  <section id="v-teachers" class="view">
+    <div class="card">
+      <h2>先生の一覧</h2>
+      <p class="hint">「比率%」で回数の重みを調整できます（役職で減らす=80、フリーで増やす=120 など）。★は主担当の目印。並びは出勤枠の集計順です。</p>
+      <table class="listtbl" id="teacherTbl"></table>
+      <div class="row" style="margin-top:10px">
+        <input id="newTeacher" placeholder="先生の名前" style="flex:1;min-width:160px">
+        <button class="primary" onclick="addTeacher()">＋ 追加</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 設定 ===== -->
+  <section id="v-settings" class="view">
+    <div class="card">
+      <h2>期間</h2>
+      <div class="row">
+        <label class="fld">開始日<input type="date" id="pStart"></label>
+        <label class="fld">終了日<input type="date" id="pEnd"></label>
+        <button class="primary" onclick="applyPeriod()">期間を反映</button>
+      </div>
+      <p class="hint">土日・祝日（海の日/山の日）は自動で「休み」になります。お盆など休園日はシフト表で日付をクリックして「休園」に変更してください。</p>
+    </div>
+    <div class="card">
+      <h2>クラス（部屋）と時間帯の枠</h2>
+      <p class="hint">枠＝シフト表の列です。「分割」をオンにすると午前/午後で2人に分けられます（各0.5回）。</p>
+      <table class="listtbl" id="slotTbl"></table>
+      <div class="row" style="margin-top:10px">
+        <input id="nsClass" placeholder="クラス名(例:ホーム)" style="width:130px">
+        <input id="nsStart" placeholder="開始(例:8:00)" style="width:90px">
+        <input id="nsEnd" placeholder="終了(例:17:00)" style="width:90px">
+        <label class="fld" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="nsSplit">分割</label>
+        <button class="primary" onclick="addSlot()">＋ 枠を追加</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 共有/保存 ===== -->
+  <section id="v-cloud" class="view">
+    <div class="card">
+      <h2>クラウド共有（Firebase）</h2>
+      <p class="hint">複数の端末・先生で同じシフトを共有・同時編集できます。下のボタンで接続すると、以降このURLを開くだけで自動的に共有モードになります。</p>
+      <div class="row">
+        <button class="primary" onclick="enableCloud()">☁ クラウド共有を有効にする</button>
+        <button onclick="disableCloud()">ローカルのみに戻す</button>
+      </div>
+      <p id="fbStatus" class="hint" style="margin-top:10px"></p>
+    </div>
+    <div class="card">
+      <h2>ファイルで保存・復元（バックアップ）</h2>
+      <div class="row">
+        <button onclick="exportJson()">⬇ データをファイル保存(JSON)</button>
+        <label class="opt" style="width:auto;display:inline-block;cursor:pointer;margin:0">
+          ⬆ ファイルから読み込み<input type="file" id="importFile" accept=".json" style="display:none" onchange="importJson(event)">
+        </label>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="cellDlg"><div class="dlg" id="cellDlgBody"></div></dialog>
+<dialog id="dayDlg"><div class="dlg" id="dayDlgBody"></div></dialog>
+
+<script>
+// ====================== 定数 ======================
+const LS_KEY = 'shiftAppState_v1';
+const LS_FB  = 'shiftAppCloud_v1';
+const EMBEDDED_FB_CONFIG = {
+  apiKey: "AIzaSyDTZVDpauFZlwF6hfPHl--B8ACU13eO45k",
+  authDomain: "pool-record.firebaseapp.com",
+  projectId: "pool-record",
+  storageBucket: "pool-record.firebasestorage.app",
+  messagingSenderId: "822991657774",
+  appId: "1:822991657774:web:1531290714eded7d4938bf"
+};
+const CLASS_COLORS = ['#2563eb','#16a34a','#db2777','#ea580c','#7c3aed','#0891b2','#ca8a04'];
+const HOLIDAYS_2026 = {'2026-07-20':'海の日','2026-08-11':'山の日'}; // 期間内の祝日
+
+// ====================== 状態 ======================
+let state = defaultState();
+let cloud = null;
+let suppressSync = false;
+
+function defaultState(){
+  const teachers = ['秀島','中世古','渡邊','上田','高田','須方','北野','上野','小西','前田',
+    '城内','永江','池亀','田中','堀上','楠田','中村','中司','保竹','岡元','河野','永山','藤原','坂井','花畑','豊西']
+    .map((n,i)=>({id:'t'+i, name:n, role:'', star:false, weight:100}));
+  const mk=(cls,s,e,split)=>({id:'s'+Math.random().toString(36).slice(2,8),cls,start:s,end:e,split:!!split});
+  const slots = [
+    mk('ホーム','7:30','16:30',true), mk('ホーム','7:30','16:30',true),
+    mk('ホーム','8:00','17:00',true), mk('ホーム','8:00','17:00',true),
+    mk('ホーム','8:30','17:30',true), mk('ホーム','8:30','17:30',true),
+    mk('ホーム','9:30','18:30',true), mk('ホーム','9:30','18:30',true),
+    mk('ホーム','10:00','15:00',false), mk('ホーム','9:00','16:00',false),
+    mk('たんぽぽ','8:00','17:00',true), mk('たんぽぽ','8:30','17:30',true), mk('たんぽぽ','9:30','18:30',true),
+  ];
+  return {
+    period:{start:'2026-07-17', end:'2026-08-27'},
+    teachers, slots,
+    days:{},          // 'YYYY-MM-DD': {type:'normal|closed|event', note, leave:[id], assign:{slotId:{full|am|pm:id}}, lock:{slotId-pos:true}}
+    updatedAt:Date.now()
+  };
+}
+
+// ====================== ユーティリティ ======================
+const el = id=>document.getElementById(id);
+const WD = ['日','月','火','水','木','金','土'];
+function pad(n){return String(n).padStart(2,'0');}
+function ymd(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());}
+function parseYmd(s){const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d);}
+function eachDate(){
+  const out=[]; let d=parseYmd(state.period.start), end=parseYmd(state.period.end);
+  while(d<=end){out.push(ymd(d)); d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+1);}
+  return out;
+}
+function teacherById(id){return state.teachers.find(t=>t.id===id);}
+function tName(id){const t=teacherById(id);return t?t.name:'';}
+function defaultType(date){
+  const dow=parseYmd(date).getDay();
+  if(dow===0||dow===6) return 'closed';
+  if(HOLIDAYS_2026[date]) return 'closed';
+  return 'normal';
+}
+function dayOf(date){
+  if(!state.days[date]) state.days[date]={};
+  const d=state.days[date];
+  if(!d.type) d.type = defaultType(date);
+  if(!d.leave) d.leave=[];
+  if(!d.assign) d.assign={};
+  if(!d.lock) d.lock={};
+  return d;
+}
+// 枠の位置（split=am/pm、それ以外=full）
+function slotPositions(slot){ return slot.split?['am','pm']:['full']; }
+function posLabel(p){return p==='am'?'前':p==='pm'?'後':'';}
+
+// ====================== 保存 ======================
+function saveLocal(){ state.updatedAt=Date.now(); localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+async function persist(){
+  saveLocal();
+  if(cloud){ try{ await cloud.save(state); }catch(e){ console.error(e); } }
+}
+function loadLocal(){
+  const raw=localStorage.getItem(LS_KEY);
+  if(raw){ try{ const s=JSON.parse(raw); if(s&&s.teachers) state=Object.assign(defaultState(),s); }catch(e){} }
+}
+
+// ====================== 画面切替 ======================
+function switchView(v){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.v===v));
+  document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
+  el('v-'+v).classList.add('active');
+}
+function refreshAll(){ renderGrid(); renderTally(); renderTeachers(); renderSlots(); renderPeriodInputs(); }
+
+// ====================== シフト表 ======================
+function classGroups(){
+  const groups=[]; const map={};
+  state.slots.forEach(s=>{ if(!map[s.cls]){map[s.cls]={cls:s.cls,slots:[]};map[s.cls]._=groups.push(map[s.cls])-1;} map[s.cls].slots.push(s); });
+  return groups;
+}
+function clsColor(cls){ const g=classGroups(); const i=g.findIndex(x=>x.cls===cls); return CLASS_COLORS[i%CLASS_COLORS.length]; }
+
+function renderGrid(){
+  const groups=classGroups();
+  // ヘッダ
+  let h1='<tr class="t1"><th class="date" rowspan="3">日付</th>';
+  groups.forEach(g=>{ let cols=0; g.slots.forEach(s=>cols+=slotPositions(s).length); h1+=`<th class="clshead" colspan="${cols}" style="background:${clsColor(g.cls)}">${g.cls}</th>`; });
+  h1+='<th rowspan="3">有給</th></tr>';
+  let h2='<tr class="t2">';
+  groups.forEach(g=>g.slots.forEach(s=>{ h2+=`<th colspan="${slotPositions(s).length}">${s.start}<br>‑${s.end}</th>`; }));
+  h2+='</tr>';
+  let h3='<tr class="t3">';
+  groups.forEach(g=>g.slots.forEach(s=>{ slotPositions(s).forEach(p=>{ h3+=`<th>${p==='full'?'終日':posLabel(p)}</th>`; }); }));
+  h3+='</tr>';
+
+  let body='';
+  eachDate().forEach(date=>{
+    const d=dayOf(date); const dt=parseYmd(date); const dow=dt.getDay();
+    const rowcls = dow===0?'sun':dow===6?'sat':(HOLIDAYS_2026[date]?'holiday':'');
+    const hol=HOLIDAYS_2026[date]?` ${HOLIDAYS_2026[date]}`:'';
+    let r=`<tr class="${rowcls}">`;
+    r+=`<td class="date" onclick="openDay('${date}')"><span class="dnum">${dt.getMonth()+1}/${dt.getDate()}</span> (${WD[dow]})${hol}`+
+       (d.note?`<div class="daytype">${escapeHtml(d.note)}</div>`:'')+`</td>`;
+    if(d.type==='closed'){
+      let span=0; groups.forEach(g=>g.slots.forEach(s=>span+=slotPositions(s).length));
+      r+=`<td class="closedrow" colspan="${span}">休園・休み</td>`;
+    } else if(d.type==='event'){
+      let span=0; groups.forEach(g=>g.slots.forEach(s=>span+=slotPositions(s).length));
+      r+=`<td class="eventrow" colspan="${span}">${escapeHtml(d.note||'行事・全員出勤')}</td>`;
+    } else {
+      groups.forEach(g=>g.slots.forEach(s=>{
+        slotPositions(s).forEach(p=>{
+          const id=(d.assign[s.id]||{})[p];
+          const onLeave=id&&d.leave.includes(id);
+          const locked=d.lock[s.id+'-'+p];
+          const cls='cellname'+(id?'':' empty')+(locked?' locked':'');
+          const style=id?`background:${tint(clsColor(s.cls))}`:'';
+          r+=`<td class="slotcell${s.split?' split':''}" onclick="openCell('${date}','${s.id}','${p}')">`+
+             `<span class="${cls}" style="${style}${onLeave?';color:#b91c1c;text-decoration:line-through':''}">${id?escapeHtml(tName(id)):'＋'}</span></td>`;
+        });
+      }));
+    }
+    // 有給セル
+    const lv=d.leave.map(tName).filter(Boolean).join('、');
+    r+=`<td class="slotcell" style="background:${d.leave.length?'var(--leave)':''};min-width:90px" onclick="openLeave('${date}')">${lv||'<span style=color:#cbd5e1>＋</span>'}</td>`;
+    r+='</tr>';
+    body+=r;
+  });
+  el('shiftGrid').innerHTML='<thead>'+h1+h2+h3+'</thead><tbody>'+body+'</tbody>';
+  el('periodLabel').textContent = state.period.start.replace(/-/g,'/')+' 〜 '+state.period.end.replace(/-/g,'/');
+}
+function tint(hex){ // 薄い背景色
+  const n=parseInt(hex.slice(1),16); const r=n>>16,g=(n>>8)&255,b=n&255;
+  return `rgba(${r},${g},${b},0.13)`;
+}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// ---- セル編集ダイアログ ----
+let dlgCtx=null;
+function openCell(date,slotId,pos){
+  const d=dayOf(date); const slot=state.slots.find(s=>s.id===slotId);
+  const cur=(d.assign[slotId]||{})[pos];
+  dlgCtx={date,slotId,pos};
+  const used=usedTeachers(date, slotId, pos); // この日すでに割当済み(重複防止)
+  let html=`<h3>${slot.cls} ${slot.start}-${slot.end}${slot.split?' / '+posLabel(pos):''}　${parseYmd(date).getMonth()+1}/${parseYmd(date).getDate()}</h3>`;
+  html+=`<input id="cellSearch" placeholder="名前で絞り込み" style="width:100%;margin-bottom:6px" oninput="filterCellOpts()">`;
+  html+='<div id="cellOpts" style="max-height:46vh;overflow:auto">';
+  html+=`<button class="opt clear" onclick="setCell(null)">空白にする</button>`;
+  state.teachers.forEach(t=>{
+    const leave=d.leave.includes(t.id); const busy=used.includes(t.id);
+    const dis=leave||busy;
+    html+=`<button class="opt teacheropt" data-n="${escapeHtml(t.name)}" ${dis?'disabled style="opacity:.4"':''} onclick="setCell('${t.id}')">`+
+      `${t.star?'★ ':''}${escapeHtml(t.name)} ${t.role?'<span class=sub style="color:#6b7280">('+escapeHtml(t.role)+')</span>':''}`+
+      `${leave?' <span class=pill style="background:var(--leave)">有給</span>':busy?' <span class=sub style="color:#6b7280">この日割当済</span>':''}`+
+      `${cur===t.id?' ✓':''}</button>`;
+  });
+  html+='</div>';
+  el('cellDlgBody').innerHTML=html; el('cellDlg').showModal();
+  setTimeout(()=>el('cellSearch').focus(),50);
+}
+function filterCellOpts(){
+  const q=el('cellSearch').value.trim();
+  document.querySelectorAll('#cellOpts .teacheropt').forEach(b=>{
+    b.style.display = !q || b.dataset.n.includes(q) ? '' : 'none';
+  });
+}
+function usedTeachers(date, exceptSlot, exceptPos){
+  const d=dayOf(date); const out=[];
+  for(const sid in d.assign){ for(const p in d.assign[sid]){ if(sid===exceptSlot&&p===exceptPos) continue; const id=d.assign[sid][p]; if(id) out.push(id); } }
+  return out;
+}
+function setCell(id){
+  const {date,slotId,pos}=dlgCtx; const d=dayOf(date);
+  if(!d.assign[slotId]) d.assign[slotId]={};
+  if(id) d.assign[slotId][pos]=id; else delete d.assign[slotId][pos];
+  d.lock[slotId+'-'+pos]=!!id; // 手動編集はロック
+  el('cellDlg').close(); persist(); renderGrid(); renderTally();
+}
+
+// ---- 有給編集 ----
+function openLeave(date){
+  const d=dayOf(date);
+  let html=`<h3>有給の先生　${parseYmd(date).getMonth()+1}/${parseYmd(date).getDate()}(${WD[parseYmd(date).getDay()]})</h3>`;
+  html+='<div style="max-height:52vh;overflow:auto">';
+  state.teachers.forEach(t=>{
+    const on=d.leave.includes(t.id);
+    html+=`<button class="opt" style="${on?'background:var(--leave);border-color:#f59e0b':''}" onclick="toggleLeave('${date}','${t.id}')">${on?'☑':'☐'} ${escapeHtml(t.name)}</button>`;
+  });
+  html+='</div><button class="opt" style="margin-top:8px" onclick="document.getElementById(\'dayDlg\').close()">閉じる</button>';
+  el('dayDlgBody').innerHTML=html; el('dayDlg').showModal();
+}
+function toggleLeave(date,id){
+  const d=dayOf(date); const i=d.leave.indexOf(id);
+  if(i>=0) d.leave.splice(i,1);
+  else { d.leave.push(id);
+    // 有給なら割当から外す
+    for(const sid in d.assign) for(const p in d.assign[sid]) if(d.assign[sid][p]===id){delete d.assign[sid][p]; delete d.lock[sid+'-'+p];}
+  }
+  persist(); renderGrid(); renderTally(); openLeave(date);
+}
+
+// ---- 日付（区分・メモ）編集 ----
+function openDay(date){
+  const d=dayOf(date);
+  let html=`<h3>${parseYmd(date).getMonth()+1}/${parseYmd(date).getDate()}(${WD[parseYmd(date).getDay()]}) の設定</h3>`;
+  html+='<div class="row" style="margin-bottom:8px">';
+  [['normal','通常シフト'],['event','行事・全員出勤'],['closed','休園・休み']].forEach(([v,lbl])=>{
+    html+=`<button class="opt" style="width:auto;${d.type===v?'background:var(--accent);color:#fff;border-color:var(--accent)':''}" onclick="setDayType('${date}','${v}')">${lbl}</button>`;
+  });
+  html+='</div>';
+  html+=`<label class="fld">メモ・行事名<input id="dayNote" value="${escapeHtml(d.note||'')}" style="width:100%"></label>`;
+  html+='<button class="opt" style="margin-top:10px;background:var(--accent);color:#fff;border-color:var(--accent)" onclick="saveDayNote(\''+date+'\')">保存</button>';
+  el('dayDlgBody').innerHTML=html; el('dayDlg').showModal();
+}
+function setDayType(date,t){ dayOf(date).type=t; persist(); renderGrid(); renderTally(); openDay(date); }
+function saveDayNote(date){ dayOf(date).note=el('dayNote').value.trim(); el('dayDlg').close(); persist(); renderGrid(); }
+
+// ====================== 集計 ======================
+function countFor(id){
+  let c=0;
+  for(const date in state.days){ const d=state.days[date]; if(d.type!=='normal') continue;
+    for(const sid in d.assign){ const slot=state.slots.find(s=>s.id===sid); if(!slot) continue;
+      for(const p in d.assign[sid]){ if(d.assign[sid][p]===id) c += (slot.split?0.5:1); }
+    } }
+  return c;
+}
+function targets(){
+  // 通常日の総枠value
+  let total=0; eachDate().forEach(date=>{ const d=dayOf(date); if(d.type!=='normal') return;
+    state.slots.forEach(s=>{ slotPositions(s).forEach(()=> total += (s.split?0.5:1)); }); });
+  const sumW=state.teachers.reduce((a,t)=>a+(t.weight||100),0)||1;
+  const tg={}; state.teachers.forEach(t=> tg[t.id]= total*(t.weight||100)/sumW );
+  return {tg,total};
+}
+function renderTally(){
+  const {tg}=targets();
+  const arr=state.teachers.map(t=>({t,c:countFor(t.id),g:tg[t.id]}));
+  let html='';
+  arr.forEach(({t,c,g})=>{
+    const diff=c-g; const cls=diff>0.6?'over':diff<-0.6?'under':'';
+    const pill=cls==='over'?'<span class="pill over">多め +'+round1(diff)+'</span>'
+      :cls==='under'?'<span class="pill under">少なめ '+round1(diff)+'</span>'
+      :'<span class="pill ok">適正</span>';
+    const pct=g>0?Math.min(100,c/g*100):0;
+    html+=`<div class="tcard ${cls}"><div class="nm">${t.star?'★ ':''}${escapeHtml(t.name)} ${pill}</div>`+
+      `<div class="sub">${round1(c)} 回 / 目安 ${round1(g)} 回 ${t.role?'・'+escapeHtml(t.role):''}（比率${t.weight||100}%）</div>`+
+      `<div class="bar"><span style="width:${pct}%"></span></div></div>`;
+  });
+  el('tally').innerHTML=html;
+}
+function round1(n){return Math.round(n*10)/10;}
+
+// ====================== 自動下書き ======================
+function autoDraft(){
+  const keepLocked = el('keepLocked').checked;
+  if(!confirm('自動でシフトの下書きを作成します。'+(keepLocked?'手動で入れたセル（青枠）は保持します。':'手動セルも上書きします。')+'\nよろしいですか？')) return;
+  const {tg}=targets();
+  const count={}, startCnt={};
+  state.teachers.forEach(t=>{count[t.id]=0; startCnt[t.id]={};});
+
+  // 既存（保持する分）を先にカウント＆クリア
+  eachDate().forEach(date=>{
+    const d=dayOf(date); if(d.type!=='normal') return;
+    state.slots.forEach(s=>slotPositions(s).forEach(p=>{
+      const key=s.id+'-'+p; const cur=(d.assign[s.id]||{})[p];
+      if(keepLocked && d.lock[key] && cur){ count[cur]+=(s.split?0.5:1); startCnt[cur][s.start]=(startCnt[cur][s.start]||0)+1; }
+      else { if(d.assign[s.id]) delete d.assign[s.id][p]; delete d.lock[key]; }
+    }));
+  });
+
+  const warns=[];
+  eachDate().forEach(date=>{
+    const d=dayOf(date); if(d.type!=='normal') return;
+    const usedToday=new Set(usedTeachers(date)); // 保持分も含む
+    // 埋める位置リスト
+    const positions=[];
+    state.slots.forEach(s=>slotPositions(s).forEach(p=>{
+      if((d.assign[s.id]||{})[p]) return; // すでに埋まっている(保持)
+      positions.push({slot:s,p,val:s.split?0.5:1});
+    }));
+    positions.forEach(pos=>{
+      // 候補：有給でない・本日未割当
+      let cand=state.teachers.filter(t=>!d.leave.includes(t.id)&&!usedToday.has(t.id)&&(t.weight||100)>0);
+      if(cand.length===0){ warns.push(`${parseYmd(date).getMonth()+1}/${parseYmd(date).getDate()} は割当できる先生が不足しています`); return; }
+      // ①総回数の充足率(おおまかな段階)が低い順 → ②この開始時刻の経験が少ない順(早番/遅番の公平化) → ③回数 → ④ランダム
+      const st=pos.slot.start;
+      cand.sort((a,b)=>{
+        const ba=Math.round(count[a.id]/(tg[a.id]||0.01)*8), bb=Math.round(count[b.id]/(tg[b.id]||0.01)*8);
+        if(ba!==bb) return ba-bb;
+        const sa=startCnt[a.id][st]||0, sb=startCnt[b.id][st]||0;
+        if(sa!==sb) return sa-sb;
+        if(count[a.id]!==count[b.id]) return count[a.id]-count[b.id];
+        return Math.random()-0.5;
+      });
+      const pick=cand[0];
+      if(!d.assign[pos.slot.id]) d.assign[pos.slot.id]={};
+      d.assign[pos.slot.id][pos.p]=pick.id;
+      count[pick.id]+=pos.val; usedToday.add(pick.id);
+      startCnt[pick.id][st]=(startCnt[pick.id][st]||0)+1;
+    });
+  });
+  const uniq=[...new Set(warns)];
+  el('warnBox').innerHTML = uniq.length?`<p class="warn">⚠ ${uniq.join(' / ')}（手動で調整してください）</p>`:'';
+  persist(); renderGrid(); renderTally();
+}
+function clearAssignments(){
+  if(!confirm('すべての割当を消去します。よろしいですか？（有給・区分は残ります）')) return;
+  for(const date in state.days){ state.days[date].assign={}; state.days[date].lock={}; }
+  el('warnBox').innerHTML=''; persist(); renderGrid(); renderTally();
+}
+function unlockAll(){ for(const date in state.days){ state.days[date].lock={}; } persist(); renderGrid(); }
+
+// ====================== 先生タブ ======================
+function renderTeachers(){
+  let h='<tr><th>★</th><th>名前</th><th>役職/役割</th><th>比率%</th><th>回数</th><th></th></tr>';
+  const {tg}=targets();
+  state.teachers.forEach((t,i)=>{
+    h+=`<tr>`+
+      `<td><input type="checkbox" ${t.star?'checked':''} onchange="updT(${i},'star',this.checked)"></td>`+
+      `<td><input value="${escapeHtml(t.name)}" style="width:120px" onchange="updT(${i},'name',this.value)"></td>`+
+      `<td><input value="${escapeHtml(t.role||'')}" placeholder="担任/フリー/主任..." style="width:140px" onchange="updT(${i},'role',this.value)"></td>`+
+      `<td><input type="number" value="${t.weight||100}" style="width:64px" onchange="updT(${i},'weight',this.value)"></td>`+
+      `<td>${round1(countFor(t.id))} / ${round1(tg[t.id]||0)}</td>`+
+      `<td><button class="iconbtn" onclick="delTeacher(${i})">🗑</button></td></tr>`;
+  });
+  el('teacherTbl').innerHTML=h;
+}
+function updT(i,k,v){ if(k==='weight') v=Number(v)||0; state.teachers[i][k]=v; persist(); renderTeachers(); renderTally(); renderGrid(); }
+function addTeacher(){ const n=el('newTeacher').value.trim(); if(!n) return;
+  state.teachers.push({id:'t'+Date.now(),name:n,role:'',star:false,weight:100}); el('newTeacher').value=''; persist(); renderTeachers(); renderTally(); }
+function delTeacher(i){ if(!confirm(state.teachers[i].name+' を削除しますか？')) return; state.teachers.splice(i,1); persist(); refreshAll(); }
+
+// ====================== 設定タブ ======================
+function renderSlots(){
+  let h='<tr><th>クラス</th><th>開始</th><th>終了</th><th>分割(午前/午後)</th><th></th></tr>';
+  state.slots.forEach((s,i)=>{
+    h+=`<tr>`+
+      `<td><input value="${escapeHtml(s.cls)}" style="width:110px" onchange="updS(${i},'cls',this.value)"></td>`+
+      `<td><input value="${escapeHtml(s.start)}" style="width:80px" onchange="updS(${i},'start',this.value)"></td>`+
+      `<td><input value="${escapeHtml(s.end)}" style="width:80px" onchange="updS(${i},'end',this.value)"></td>`+
+      `<td style="text-align:center"><input type="checkbox" ${s.split?'checked':''} onchange="updS(${i},'split',this.checked)"></td>`+
+      `<td><button class="iconbtn" onclick="delSlot(${i})">🗑</button></td></tr>`;
+  });
+  el('slotTbl').innerHTML=h;
+}
+function updS(i,k,v){ state.slots[i][k]=v; persist(); refreshAll(); }
+function addSlot(){ const cls=el('nsClass').value.trim()||'クラス'; const s=el('nsStart').value.trim()||'8:00'; const e=el('nsEnd').value.trim()||'17:00';
+  state.slots.push({id:'s'+Date.now().toString(36),cls,start:s,end:e,split:el('nsSplit').checked});
+  el('nsClass').value=el('nsStart').value=el('nsEnd').value=''; el('nsSplit').checked=false; persist(); refreshAll(); }
+function delSlot(i){ if(!confirm('この枠を削除しますか？該当列の割当も消えます')) return; state.slots.splice(i,1); persist(); refreshAll(); }
+function renderPeriodInputs(){ el('pStart').value=state.period.start; el('pEnd').value=state.period.end; }
+function applyPeriod(){ const s=el('pStart').value,e=el('pEnd').value; if(!s||!e||s>e){alert('期間が正しくありません');return;}
+  state.period={start:s,end:e}; persist(); refreshAll(); }
+
+// ====================== Excel出力 ======================
+function exportXlsx(){
+  const groups=classGroups();
+  const r1=['日付'], r2=['',], r3=['',];
+  groups.forEach(g=>g.slots.forEach(s=>slotPositions(s).forEach((p,idx)=>{
+    r1.push(idx===0?g.cls:''); r2.push(`${s.start}-${s.end}`); r3.push(p==='full'?'終日':posLabel(p));
+  })));
+  r1.push('有給');r2.push('');r3.push('');
+  const rows=[r1,r2,r3];
+  eachDate().forEach(date=>{
+    const d=dayOf(date); const dt=parseYmd(date);
+    const row=[`${dt.getMonth()+1}/${dt.getDate()}(${WD[dt.getDay()]})`+(d.note?' '+d.note:'')];
+    if(d.type!=='normal'){
+      let span=0; groups.forEach(g=>g.slots.forEach(s=>span+=slotPositions(s).length));
+      row.push(d.type==='closed'?'休園・休み':(d.note||'行事・全員出勤'));
+      for(let k=1;k<span;k++) row.push('');
+    } else {
+      groups.forEach(g=>g.slots.forEach(s=>slotPositions(s).forEach(p=>{ row.push(tName((d.assign[s.id]||{})[p])||''); })));
+    }
+    row.push(d.leave.map(tName).join('、'));
+    rows.push(row);
+  });
+  // 集計シート
+  const {tg}=targets();
+  const trows=[['先生','役職','比率%','回数','目安']];
+  state.teachers.forEach(t=>trows.push([(t.star?'★':'')+t.name,t.role||'',t.weight||100,round1(countFor(t.id)),round1(tg[t.id]||0)]));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'シフト');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(trows), '回数集計');
+  XLSX.writeFile(wb, `シフト_${state.period.start}_${state.period.end}.xlsx`);
+}
+
+// ====================== JSON入出力 ======================
+function exportJson(){
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=`shift_${state.period.start}.json`; a.click();
+}
+function importJson(ev){
+  const f=ev.target.files[0]; if(!f) return; const rd=new FileReader();
+  rd.onload=()=>{ try{ const s=JSON.parse(rd.result); if(!s.teachers) throw 0; state=Object.assign(defaultState(),s); persist(); refreshAll(); alert('読み込みました'); }catch(e){ alert('読み込みに失敗しました'); } };
+  rd.readAsText(f); ev.target.value='';
+}
+
+// ====================== Firebase ======================
+async function connectCloud(cfg){
+  const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+  const fs = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  const app=initializeApp(cfg); const db=fs.getFirestore(app);
+  const docRef=fs.doc(db,'shift_schedules','main');
+  fs.onSnapshot(docRef, snap=>{
+    const data=snap.data();
+    if(data&&data.json){ try{ const s=JSON.parse(data.json);
+      if(s&&s.teachers&&(!state.updatedAt||s.updatedAt>=state.updatedAt)){ suppressSync=true; state=Object.assign(defaultState(),s); saveLocal(); refreshAll(); suppressSync=false; }
+    }catch(e){console.error(e);} }
+  });
+  return { async save(st){ if(suppressSync) return; await fs.setDoc(docRef,{json:JSON.stringify(st),updatedAt:st.updatedAt}); } };
+}
+async function enableCloud(){
+  try{
+    el('fbStatus').textContent='接続中...';
+    cloud=await connectCloud(EMBEDDED_FB_CONFIG);
+    localStorage.setItem(LS_FB,'1');
+    setMode(true); el('fbStatus').innerHTML='<span class="ok">✅ クラウド共有に接続しました。</span>';
+    await cloud.save(state);
+  }catch(e){ console.error(e); el('fbStatus').innerHTML='<span class="warn">接続に失敗しました。通信状態を確認してください。</span>'; }
+}
+function disableCloud(){ cloud=null; localStorage.removeItem(LS_FB); setMode(false); el('fbStatus').textContent='ローカルのみに戻しました。'; }
+async function initCloudIfConfigured(){
+  if(localStorage.getItem(LS_FB)){ try{ cloud=await connectCloud(EMBEDDED_FB_CONFIG); setMode(true); el('fbStatus').innerHTML='<span class="ok">✅ クラウド共有に接続中。</span>'; }catch(e){ console.error(e); setMode(false); } }
+}
+function setMode(c){ const b=el('modeBadge'); b.textContent=c?'クラウド共有中':'ローカル保存'; b.classList.toggle('cloud',c); }
+
+// ====================== 起動 ======================
+loadLocal();
+refreshAll();
+initCloudIfConfigured();
+</script>
+</body>
+</html>
