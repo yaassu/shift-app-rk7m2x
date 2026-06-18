@@ -97,6 +97,7 @@
 <body>
 <header>
   <h1>📅 長期休暇シフト作成</h1>
+  <select id="schedSel" onchange="switchSchedule(this.value)" style="font-weight:700;max-width:220px"></select>
   <span id="modeBadge" class="badge">ローカル保存</span>
   <span id="periodLabel" class="badge"></span>
   <div class="spacer"></div>
@@ -160,6 +161,18 @@
   <!-- ===== 設定 ===== -->
   <section id="v-settings" class="view">
     <div class="card">
+      <h2>日程（シフト表）の管理</h2>
+      <p class="hint">夏休み・春休みなど複数のシフト表を切り替えて使えます（上部メニューでも切替可）。新しい日程は、既存の日程から「先生・枠をコピー」して作ると入力が楽です（割当・有給はコピーされません）。</p>
+      <table class="listtbl" id="schedTbl"></table>
+      <div class="row" style="margin-top:12px;align-items:flex-end">
+        <label class="fld">日程名<input id="newSchedName" placeholder="例：2027 春休み" style="width:160px"></label>
+        <label class="fld">開始日<input type="date" id="newSchedStart"></label>
+        <label class="fld">終了日<input type="date" id="newSchedEnd"></label>
+        <label class="fld">コピー元<select id="newSchedFrom"></select></label>
+        <button class="primary" onclick="createSchedule()">＋ 日程を作成</button>
+      </div>
+    </div>
+    <div class="card">
       <h2>期間</h2>
       <div class="row">
         <label class="fld">開始日<input type="date" id="pStart"></label>
@@ -222,6 +235,7 @@
 <script>
 // ====================== 定数 ======================
 const LS_KEY = 'shiftAppState_v1';
+const LS_CUR = 'shiftAppCurrent_v1';
 const LS_FB  = 'shiftAppCloud_v1';
 const EMBEDDED_FB_CONFIG = {
   apiKey: "AIzaSyDTZVDpauFZlwF6hfPHl--B8ACU13eO45k",
@@ -232,19 +246,30 @@ const EMBEDDED_FB_CONFIG = {
   appId: "1:822991657774:web:1531290714eded7d4938bf"
 };
 const CLASS_COLORS = ['#2563eb','#16a34a','#db2777','#ea580c','#7c3aed','#0891b2','#ca8a04'];
-const HOLIDAYS_2026 = {'2026-07-20':'海の日','2026-08-11':'山の日'}; // 期間内の祝日
+// 長期休暇期間にかかる祝日（必要に応じて追記可。期間内のその他の休園日は日付クリックで設定）
+const JP_HOLIDAYS = {
+  '2026-07-20':'海の日','2026-08-11':'山の日','2026-09-21':'敬老の日','2026-09-23':'秋分の日',
+  '2026-12-29':'年末','2026-12-30':'年末','2026-12-31':'年末','2027-01-01':'元日','2027-01-02':'休','2027-01-03':'休',
+  '2026-03-20':'春分の日','2027-03-21':'春分の日',
+  '2027-07-19':'海の日','2027-08-11':'山の日'
+};
 
 // ====================== 状態 ======================
-let state = defaultState();
-let cloud = null;
-let suppressSync = false;
+// store = { schedules:{ id:{id,name,period,teachers,slots,days} }, updatedAt }
+// state は「現在表示中の日程」への参照。currentId は端末ごとのローカル設定。
+let store, currentId, state, cloud=null, suppressSync=false;
 
-function defaultState(){
-  const teachers = ['秀島','中世古','渡邊','上田','高田','須方','北野','上野','小西','前田',
+function newId(p){ return p+Date.now().toString(36)+Math.random().toString(36).slice(2,5); }
+function deepCopy(x){ return JSON.parse(JSON.stringify(x)); }
+
+function defaultTeachers(){
+  return ['秀島','中世古','渡邊','上田','高田','須方','北野','上野','小西','前田',
     '城内','永江','池亀','田中','堀上','楠田','中村','中司','保竹','岡元','河野','永山','藤原','坂井','花畑','豊西']
     .map((n,i)=>({id:'t'+i, name:n, role:'', star:false, weight:100}));
+}
+function defaultSlots(){
   const mk=(cls,s,e,split)=>({id:'s'+Math.random().toString(36).slice(2,8),cls,start:s,end:e,split:!!split});
-  const slots = [
+  return [
     mk('ホーム','7:30','16:30',true), mk('ホーム','7:30','16:30',true),
     mk('ホーム','8:00','17:00',true), mk('ホーム','8:00','17:00',true),
     mk('ホーム','8:30','17:30',true), mk('ホーム','8:30','17:30',true),
@@ -252,13 +277,35 @@ function defaultState(){
     mk('ホーム','10:00','15:00',false), mk('ホーム','9:00','16:00',false),
     mk('たんぽぽ','8:00','17:00',true), mk('たんぽぽ','8:30','17:30',true), mk('たんぽぽ','9:30','18:30',true),
   ];
+}
+// 1つの日程（シフト表）を作る。from を渡すと先生・枠をコピー（割当や有給はコピーしない）
+function defaultSchedule(name, period, from){
   return {
-    period:{start:'2026-07-17', end:'2026-08-27'},
-    teachers, slots,
-    days:{},          // 'YYYY-MM-DD': {type:'normal|closed|event', note, leave:[id], assign:{slotId:{full|am|pm:id}}, lock:{slotId-pos:true}}
-    updatedAt:Date.now()
+    id:newId('sc'),
+    name: name||'新しい日程',
+    period: period||{start:'2026-07-17', end:'2026-08-27'},
+    teachers: from? deepCopy(from.teachers) : defaultTeachers(),
+    slots: from? deepCopy(from.slots) : defaultSlots(),
+    days:{}   // 'YYYY-MM-DD': {type, note, leave:[id], assign:{slotId:{full|am|pm:id}}, lock:{}}
   };
 }
+function defaultStore(){
+  const sc=defaultSchedule('2026 夏休み',{start:'2026-07-17',end:'2026-08-27'});
+  return {schedules:{[sc.id]:sc}, updatedAt:Date.now()};
+}
+// 旧形式（単一日程）→ store へ移行。すでに store ならそのまま返す
+function migrate(obj){
+  if(!obj) return null;
+  if(obj.schedules) return obj;
+  if(obj.teachers){ // 旧：単一シフト
+    const sc={ id:newId('sc'), name:'2026 夏休み',
+      period:obj.period||{start:'2026-07-17',end:'2026-08-27'},
+      teachers:obj.teachers, slots:obj.slots||defaultSlots(), days:obj.days||{} };
+    return {schedules:{[sc.id]:sc}, updatedAt:obj.updatedAt||Date.now()};
+  }
+  return null;
+}
+function setCurrent(id){ currentId=id; state=store.schedules[id]; }
 
 // ====================== ユーティリティ ======================
 const el = id=>document.getElementById(id);
@@ -276,7 +323,7 @@ function tName(id){const t=teacherById(id);return t?t.name:'';}
 function defaultType(date){
   const dow=parseYmd(date).getDay();
   if(dow===0||dow===6) return 'closed';
-  if(HOLIDAYS_2026[date]) return 'closed';
+  if(JP_HOLIDAYS[date]) return 'closed';
   return 'normal';
 }
 function dayOf(date){
@@ -293,14 +340,20 @@ function slotPositions(slot){ return slot.split?['am','pm']:['full']; }
 function posLabel(p){return p==='am'?'前':p==='pm'?'後':'';}
 
 // ====================== 保存 ======================
-function saveLocal(){ state.updatedAt=Date.now(); localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+function saveLocal(){ store.updatedAt=Date.now(); localStorage.setItem(LS_KEY, JSON.stringify(store)); localStorage.setItem(LS_CUR, currentId); }
 async function persist(){
   saveLocal();
-  if(cloud){ try{ await cloud.save(state); }catch(e){ console.error(e); } }
+  if(cloud){ try{ await cloud.save(store); }catch(e){ console.error(e); } }
 }
-function loadLocal(){
+function loadStore(){
+  let st=null;
   const raw=localStorage.getItem(LS_KEY);
-  if(raw){ try{ const s=JSON.parse(raw); if(s&&s.teachers) state=Object.assign(defaultState(),s); }catch(e){} }
+  if(raw){ try{ st=migrate(JSON.parse(raw)); }catch(e){} }
+  if(!st) st=defaultStore();
+  store=st;
+  let cur=localStorage.getItem(LS_CUR);
+  if(!cur || !store.schedules[cur]) cur=Object.keys(store.schedules)[0];
+  setCurrent(cur);
 }
 
 // ====================== 画面切替 ======================
@@ -309,7 +362,52 @@ function switchView(v){
   document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
   el('v-'+v).classList.add('active');
 }
-function refreshAll(){ renderGrid(); renderTally(); renderTeachers(); renderSlots(); renderPeriodInputs(); }
+function refreshAll(){ renderScheduleSelector(); renderScheduleManager(); renderGrid(); renderTally(); renderTeachers(); renderSlots(); renderPeriodInputs(); }
+
+// ====================== 日程（シフト表）の管理 ======================
+function renderScheduleSelector(){
+  const sel=el('schedSel'); if(!sel) return;
+  sel.innerHTML=Object.values(store.schedules).map(sc=>`<option value="${sc.id}" ${sc.id===currentId?'selected':''}>${escapeHtml(sc.name)}</option>`).join('');
+}
+function switchSchedule(id){ if(!store.schedules[id]) return; setCurrent(id); saveLocal(); refreshAll(); }
+function renderScheduleManager(){
+  const tbl=el('schedTbl'); if(!tbl) return;
+  let h='<tr><th>日程名</th><th>期間</th><th>入力済み</th><th></th></tr>';
+  Object.values(store.schedules).forEach(sc=>{
+    const cur=sc.id===currentId;
+    const filled=Object.values(sc.days).filter(d=>(d.leave&&d.leave.length)||(d.assign&&Object.values(d.assign).some(o=>Object.keys(o).length))).length;
+    h+=`<tr${cur?' style="background:#eff6ff"':''}>`+
+      `<td><input value="${escapeHtml(sc.name)}" style="width:170px" onchange="renameSchedule('${sc.id}',this.value)"></td>`+
+      `<td>${sc.period.start} 〜 ${sc.period.end}</td>`+
+      `<td style="text-align:center">${filled}日</td>`+
+      `<td>`+(cur?'<span class="pill ok">表示中</span>':`<button class="opt" style="width:auto;display:inline-block;padding:4px 12px;margin:0" onclick="switchSchedule('${sc.id}')">開く</button>`)+
+      ` <button class="iconbtn" onclick="deleteSchedule('${sc.id}')">🗑</button></td></tr>`;
+  });
+  tbl.innerHTML=h;
+  const from=el('newSchedFrom');
+  if(from) from.innerHTML='<option value="">標準テンプレート（夏休み用の枠）</option>'+
+    Object.values(store.schedules).map(sc=>`<option value="${sc.id}">「${escapeHtml(sc.name)}」の先生・枠をコピー</option>`).join('');
+}
+function createSchedule(){
+  const name=el('newSchedName').value.trim()||'新しい日程';
+  const start=el('newSchedStart').value, end=el('newSchedEnd').value;
+  if(!start||!end||start>end){ alert('期間（開始日・終了日）を正しく入力してください。'); return; }
+  const fromId=el('newSchedFrom').value; const from=fromId?store.schedules[fromId]:null;
+  const sc=defaultSchedule(name,{start,end},from);
+  store.schedules[sc.id]=sc; setCurrent(sc.id);
+  el('newSchedName').value=''; el('newSchedStart').value=''; el('newSchedEnd').value='';
+  persist(); refreshAll();
+  alert(`日程「${name}」を作成しました。`+(from?'先生と枠をコピーしました。':''));
+}
+function renameSchedule(id,name){ const sc=store.schedules[id]; if(!sc) return; sc.name=name.trim()||'(無名)'; persist(); renderScheduleSelector(); }
+function deleteSchedule(id){
+  if(Object.keys(store.schedules).length<=1){ alert('日程は最低1つ必要です。最後の1つは削除できません。'); return; }
+  const sc=store.schedules[id]; if(!sc) return;
+  if(!confirm(`日程「${sc.name}」を削除しますか？\nこのシフト表の割当・有給データもすべて消えます（元に戻せません）。`)) return;
+  delete store.schedules[id];
+  if(currentId===id) setCurrent(Object.keys(store.schedules)[0]);
+  persist(); refreshAll();
+}
 
 // ====================== シフト表 ======================
 function classGroups(){
@@ -335,8 +433,8 @@ function renderGrid(){
   let body='';
   eachDate().forEach(date=>{
     const d=dayOf(date); const dt=parseYmd(date); const dow=dt.getDay();
-    const rowcls = dow===0?'sun':dow===6?'sat':(HOLIDAYS_2026[date]?'holiday':'');
-    const hol=HOLIDAYS_2026[date]?` ${HOLIDAYS_2026[date]}`:'';
+    const rowcls = dow===0?'sun':dow===6?'sat':(JP_HOLIDAYS[date]?'holiday':'');
+    const hol=JP_HOLIDAYS[date]?` ${JP_HOLIDAYS[date]}`:'';
     let r=`<tr class="${rowcls}">`;
     r+=`<td class="date" onclick="openDay('${date}')"><span class="dnum">${dt.getMonth()+1}/${dt.getDate()}</span> (${WD[dow]})${hol}`+
        (d.note?`<div class="daytype">${escapeHtml(d.note)}</div>`:'')+`</td>`;
@@ -625,13 +723,15 @@ function exportXlsx(){
 
 // ====================== JSON入出力 ======================
 function exportJson(){
-  const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify(store,null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download=`shift_${state.period.start}.json`; a.click();
+  a.download=`shiftapp_backup_${ymd(new Date())}.json`; a.click();
 }
 function importJson(ev){
   const f=ev.target.files[0]; if(!f) return; const rd=new FileReader();
-  rd.onload=()=>{ try{ const s=JSON.parse(rd.result); if(!s.teachers) throw 0; state=Object.assign(defaultState(),s); persist(); refreshAll(); alert('読み込みました'); }catch(e){ alert('読み込みに失敗しました'); } };
+  rd.onload=()=>{ try{ const obj=migrate(JSON.parse(rd.result)); if(!obj) throw 0;
+    store=obj; setCurrent(Object.keys(store.schedules)[0]); persist(); refreshAll(); alert('全日程を読み込みました'); }
+    catch(e){ alert('読み込みに失敗しました'); } };
   rd.readAsText(f); ev.target.value='';
 }
 
@@ -737,8 +837,16 @@ async function connectCloud(cfg){
   const docRef=fs.doc(db,'shift_schedules','main');
   fs.onSnapshot(docRef, snap=>{
     const data=snap.data();
-    if(data&&data.json){ try{ const s=JSON.parse(data.json);
-      if(s&&s.teachers&&(!state.updatedAt||s.updatedAt>=state.updatedAt)){ suppressSync=true; state=Object.assign(defaultState(),s); saveLocal(); refreshAll(); suppressSync=false; }
+    if(data&&data.json){ try{
+      const obj=migrate(JSON.parse(data.json));
+      const remoteAt=data.updatedAt||(obj&&obj.updatedAt)||0;
+      if(obj && (!store.updatedAt || remoteAt>=store.updatedAt)){
+        suppressSync=true; store=obj;
+        if(!store.schedules[currentId]) currentId=Object.keys(store.schedules)[0];
+        setCurrent(currentId);
+        localStorage.setItem(LS_KEY,JSON.stringify(store)); localStorage.setItem(LS_CUR,currentId);
+        refreshAll(); suppressSync=false;
+      }
     }catch(e){console.error(e);} }
   });
   return { async save(st){ if(suppressSync) return; await fs.setDoc(docRef,{json:JSON.stringify(st),updatedAt:st.updatedAt}); } };
@@ -749,7 +857,7 @@ async function enableCloud(){
     cloud=await connectCloud(EMBEDDED_FB_CONFIG);
     localStorage.setItem(LS_FB,'1');
     setMode(true); el('fbStatus').innerHTML='<span class="ok">✅ クラウド共有に接続しました。</span>';
-    await cloud.save(state);
+    await cloud.save(store);
   }catch(e){ console.error(e); el('fbStatus').innerHTML='<span class="warn">接続に失敗しました。通信状態を確認してください。</span>'; }
 }
 function disableCloud(){ cloud=null; localStorage.removeItem(LS_FB); setMode(false); el('fbStatus').textContent='ローカルのみに戻しました。'; }
@@ -759,7 +867,7 @@ async function initCloudIfConfigured(){
 function setMode(c){ const b=el('modeBadge'); b.textContent=c?'クラウド共有中':'ローカル保存'; b.classList.toggle('cloud',c); }
 
 // ====================== 起動 ======================
-loadLocal();
+loadStore();
 refreshAll();
 initCloudIfConfigured();
 </script>
