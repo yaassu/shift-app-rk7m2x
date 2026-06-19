@@ -276,8 +276,16 @@ function defaultSlots(){
     mk('ホーム','9:30','18:30',true), mk('ホーム','9:30','18:30',true),
     mk('ホーム','10:00','15:00',false), mk('ホーム','9:00','16:00',false),
     mk('たんぽぽ','8:00','17:00',true), mk('たんぽぽ','8:30','17:30',true), mk('たんぽぽ','9:30','18:30',true),
+    mk('スタンバイ','8:00','17:00',false),
   ];
 }
+// 既存の日程に「スタンバイ」枠が無ければ一度だけ追加（削除した後は復活させない）
+function ensureStandby(sc){
+  if(sc.stdbyInit) return; sc.stdbyInit=true;
+  if(!sc.slots.some(s=>s.cls==='スタンバイ'))
+    sc.slots.push({id:'s'+Math.random().toString(36).slice(2,8), cls:'スタンバイ', start:'8:00', end:'17:00', split:false});
+}
+function normalizeStore(){ if(store&&store.schedules) Object.values(store.schedules).forEach(ensureStandby); }
 // 1つの日程（シフト表）を作る。from を渡すと先生・枠をコピー（割当や有給はコピーしない）
 function defaultSchedule(name, period, from){
   return {
@@ -286,7 +294,8 @@ function defaultSchedule(name, period, from){
     period: period||{start:'2026-07-17', end:'2026-08-27'},
     teachers: from? deepCopy(from.teachers) : defaultTeachers(),
     slots: from? deepCopy(from.slots) : defaultSlots(),
-    days:{}   // 'YYYY-MM-DD': {type, note, leave:[id], assign:{slotId:{full|am|pm:id}}, lock:{}}
+    days:{},  // 'YYYY-MM-DD': {type, note, leave:[id], assign:{slotId:{full|am|pm:id}}, lock:{}}
+    stdbyInit:true
   };
 }
 function defaultStore(){
@@ -338,6 +347,14 @@ function dayOf(date){
 // 枠の位置（split=am/pm、それ以外=full）
 function slotPositions(slot){ return slot.split?['am','pm']:['full']; }
 function posLabel(p){return p==='am'?'前':p==='pm'?'後':'';}
+// 時刻計算（分割枠の前/後を、開始〜終了の中間で分けて実際の時間帯を出す）
+function toMin(t){ const m=String(t).split(':'); return (+m[0])*60+(+(m[1]||0)); }
+function toHM(min){ return Math.floor(min/60)+':'+pad(min%60); }
+function posTimeLabel(slot,p){
+  if(p==='full') return `${slot.start}-${slot.end}`;
+  const s=toMin(slot.start), e=toMin(slot.end), mid=toHM(Math.round((s+e)/2));
+  return p==='am'?`${slot.start}-${mid}`:`${mid}-${slot.end}`;
+}
 
 // ====================== 保存 ======================
 function saveLocal(){ store.updatedAt=Date.now(); localStorage.setItem(LS_KEY, JSON.stringify(store)); localStorage.setItem(LS_CUR, currentId); }
@@ -350,7 +367,7 @@ function loadStore(){
   const raw=localStorage.getItem(LS_KEY);
   if(raw){ try{ st=migrate(JSON.parse(raw)); }catch(e){} }
   if(!st) st=defaultStore();
-  store=st;
+  store=st; normalizeStore();
   let cur=localStorage.getItem(LS_CUR);
   if(!cur || !store.schedules[cur]) cur=Object.keys(store.schedules)[0];
   setCurrent(cur);
@@ -424,10 +441,13 @@ function renderGrid(){
   groups.forEach(g=>{ let cols=0; g.slots.forEach(s=>cols+=slotPositions(s).length); h1+=`<th class="clshead" colspan="${cols}" style="background:${clsColor(g.cls)}">${g.cls}</th>`; });
   h1+='<th rowspan="3">有給</th></tr>';
   let h2='<tr class="t2">';
-  groups.forEach(g=>g.slots.forEach(s=>{ h2+=`<th colspan="${slotPositions(s).length}">${s.start}<br>‑${s.end}</th>`; }));
+  groups.forEach(g=>g.slots.forEach(s=>{ h2+=`<th colspan="${slotPositions(s).length}">${s.start}-${s.end}</th>`; }));
   h2+='</tr>';
   let h3='<tr class="t3">';
-  groups.forEach(g=>g.slots.forEach(s=>{ slotPositions(s).forEach(p=>{ h3+=`<th>${p==='full'?'終日':posLabel(p)}</th>`; }); }));
+  groups.forEach(g=>g.slots.forEach(s=>{ slotPositions(s).forEach(p=>{
+    const lbl = p==='full' ? '終日' : `${posLabel(p)}<br><span style="color:#6b7280;font-size:10px">${posTimeLabel(s,p)}</span>`;
+    h3+=`<th>${lbl}</th>`;
+  }); }));
   h3+='</tr>';
 
   let body='';
@@ -479,16 +499,15 @@ function openCell(date,slotId,pos){
   const cur=(d.assign[slotId]||{})[pos];
   dlgCtx={date,slotId,pos};
   const used=usedTeachers(date, slotId, pos); // この日すでに割当済み(重複防止)
-  let html=`<h3>${slot.cls} ${slot.start}-${slot.end}${slot.split?' / '+posLabel(pos):''}　${parseYmd(date).getMonth()+1}/${parseYmd(date).getDate()}</h3>`;
+  let html=`<h3>${slot.cls} ${posTimeLabel(slot,pos)}${slot.split?' ('+posLabel(pos)+')':''}　${parseYmd(date).getMonth()+1}/${parseYmd(date).getDate()}</h3>`;
   html+=`<input id="cellSearch" placeholder="名前で絞り込み" style="width:100%;margin-bottom:6px" oninput="filterCellOpts()">`;
   html+='<div id="cellOpts" style="max-height:46vh;overflow:auto">';
   html+=`<button class="opt clear" onclick="setCell(null)">空白にする</button>`;
   state.teachers.forEach(t=>{
-    const leave=d.leave.includes(t.id); const busy=used.includes(t.id);
-    const dis=leave||busy;
-    html+=`<button class="opt teacheropt" data-n="${escapeHtml(t.name)}" ${dis?'disabled style="opacity:.4"':''} onclick="setCell('${t.id}')">`+
+    const leave=d.leave.includes(t.id); const busy=used.includes(t.id); // busyでも選択可（前後の両方に同じ人を入れられる）
+    html+=`<button class="opt teacheropt" data-n="${escapeHtml(t.name)}" ${leave?'disabled style="opacity:.4"':''} onclick="setCell('${t.id}')">`+
       `${t.star?'★ ':''}${escapeHtml(t.name)} ${t.role?'<span class=sub style="color:#6b7280">('+escapeHtml(t.role)+')</span>':''}`+
-      `${leave?' <span class=pill style="background:var(--leave)">有給</span>':busy?' <span class=sub style="color:#6b7280">この日割当済</span>':''}`+
+      `${leave?' <span class=pill style="background:var(--leave)">有給</span>':busy?' <span class=sub style="color:#6b7280">この日 他にも担当</span>':''}`+
       `${cur===t.id?' ✓':''}</button>`;
   });
   html+='</div>';
@@ -615,6 +634,7 @@ function autoDraft(){
       if((d.assign[s.id]||{})[p]) return; // すでに埋まっている(保持)
       positions.push({slot:s,p,val:s.split?0.5:1});
     }));
+    positions.sort((a,b)=>b.val-a.val); // 終日(1.0)枠から先に配ると回数のかたよりが小さくなる
     positions.forEach(pos=>{
       // 候補：有給でない・本日未割当
       let cand=state.teachers.filter(t=>!d.leave.includes(t.id)&&!usedToday.has(t.id)&&(t.weight||100)>0);
@@ -622,7 +642,7 @@ function autoDraft(){
       // ①総回数の充足率(おおまかな段階)が低い順 → ②この開始時刻の経験が少ない順(早番/遅番の公平化) → ③回数 → ④ランダム
       const st=pos.slot.start;
       cand.sort((a,b)=>{
-        const ba=Math.round(count[a.id]/(tg[a.id]||0.01)*8), bb=Math.round(count[b.id]/(tg[b.id]||0.01)*8);
+        const ba=Math.round(count[a.id]/(tg[a.id]||0.01)*12), bb=Math.round(count[b.id]/(tg[b.id]||0.01)*12);
         if(ba!==bb) return ba-bb;
         const sa=startCnt[a.id][st]||0, sb=startCnt[b.id][st]||0;
         if(sa!==sb) return sa-sb;
@@ -694,7 +714,7 @@ function exportXlsx(){
   const groups=classGroups();
   const r1=['日付'], r2=['',], r3=['',];
   groups.forEach(g=>g.slots.forEach(s=>slotPositions(s).forEach((p,idx)=>{
-    r1.push(idx===0?g.cls:''); r2.push(`${s.start}-${s.end}`); r3.push(p==='full'?'終日':posLabel(p));
+    r1.push(idx===0?g.cls:''); r2.push(`${s.start}-${s.end}`); r3.push(p==='full'?'終日':`${posLabel(p)} ${posTimeLabel(s,p)}`);
   })));
   r1.push('有給');r2.push('');r3.push('');
   const rows=[r1,r2,r3];
@@ -730,7 +750,7 @@ function exportJson(){
 function importJson(ev){
   const f=ev.target.files[0]; if(!f) return; const rd=new FileReader();
   rd.onload=()=>{ try{ const obj=migrate(JSON.parse(rd.result)); if(!obj) throw 0;
-    store=obj; setCurrent(Object.keys(store.schedules)[0]); persist(); refreshAll(); alert('全日程を読み込みました'); }
+    store=obj; normalizeStore(); setCurrent(Object.keys(store.schedules)[0]); persist(); refreshAll(); alert('全日程を読み込みました'); }
     catch(e){ alert('読み込みに失敗しました'); } };
   rd.readAsText(f); ev.target.value='';
 }
@@ -841,7 +861,7 @@ async function connectCloud(cfg){
       const obj=migrate(JSON.parse(data.json));
       const remoteAt=data.updatedAt||(obj&&obj.updatedAt)||0;
       if(obj && (!store.updatedAt || remoteAt>=store.updatedAt)){
-        suppressSync=true; store=obj;
+        suppressSync=true; store=obj; normalizeStore();
         if(!store.schedules[currentId]) currentId=Object.keys(store.schedules)[0];
         setCurrent(currentId);
         localStorage.setItem(LS_KEY,JSON.stringify(store)); localStorage.setItem(LS_CUR,currentId);
